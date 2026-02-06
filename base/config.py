@@ -44,6 +44,40 @@ class Config:
         # 3.3 日志 文件路径
         self.LOG_FILE = self.config.get('logger', 'log_file', )
 
+        # 3.4milvus配置
+        self.MILVUS_HOST = self.config.get('milvus', 'host', fallback='localhost')
+        self.MILVUS_PORT = self.config.get('milvus', 'port', fallback='19530')
+        self.MILVUS_DATABASE_NAME = self.config.get('milvus', 'database_name', fallback='itcast')
+        self.MILVUS_COLLECTION_NAME = self.config.get('milvus', 'collection_name', fallback='edurag_final')
+
+        # LLM 配置
+        # LLM 模型名
+        self.LLM_MODEL = self.config.get('llm', 'model', fallback='qwen-plus')
+        # DashScope API 密钥
+        self.DASHSCOPE_API_KEY = self.config.get('llm', 'dashscope_api_key')
+        # DashScope API 地址
+        self.DASHSCOPE_BASE_URL = self.config.get('llm', 'dashscope_base_url',
+                                                  fallback='https://dashscope.aliyuncs.com/compatible-mode/v1')
+
+        # 检索参数
+        # 父块大小
+        self.PARENT_CHUNK_SIZE = self.config.getint('retrieval', 'parent_chunk_size', fallback=1200)
+        # 子块大小
+        self.CHILD_CHUNK_SIZE = self.config.getint('retrieval', 'child_chunk_size', fallback=300)
+        # 块重叠大小
+        self.CHUNK_OVERLAP = self.config.getint('retrieval', 'chunk_overlap', fallback=50)
+        # 检索返回数量
+        self.RETRIEVAL_K = self.config.getint('retrieval', 'retrieval_k', fallback=5)
+        # 最终候选数量
+        self.CANDIDATE_M = self.config.getint('retrieval', 'candidate_m', fallback=2)
+
+        # 应用配置
+        # 有效来源列表
+        self.VALID_SOURCES = eval(
+            self.config.get('app', 'valid_sources', fallback='["ai", "java", "test", "ops", "bigdata"]'))
+        # 客服电话
+        self.CUSTOMER_SERVICE_PHONE = self.config.get('app', 'customer_service_phone', fallback='12345678')
+
 
 conf = Config(config_file_path)
 
@@ -60,3 +94,7 @@ if __name__ == '__main__':
     print(conf.REDIS_PORT)
     print()
     print(conf.LOG_FILE)
+
+    print(conf.LLM_MODEL)
+    print(conf.PARENT_CHUNK_SIZE)
+    print(conf.VALID_SOURCES)
