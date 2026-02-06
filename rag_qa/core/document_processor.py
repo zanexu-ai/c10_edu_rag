@@ -11,6 +11,7 @@ from langchain_community.document_loaders.markdown import UnstructuredMarkdownLo
 # 针对markdown文档文本进行切分, 尊重其结构化格式(例如:标题层级)
 from langchain.text_splitter import MarkdownTextSplitter
 
+from base.config import conf
 # todo1 配置文件路径
 # current_dir = os.path.dirname(os.path.abspath(__file__))
 # rag_qa_path = os.path.dirname(current_dir)
@@ -112,6 +113,42 @@ def load_documents_from_directory(directory_path):
                 logger.warning(f"不支持的文件类型: {file_path}")
     # 返回加载的所有文档列表
     return documents
+
+
+# todo 3# 定义函数，处理文档并进行分层切分，返回子块结果
+def process_documents(directory_path, parent_chunk_size=conf.PARENT_CHUNK_SIZE,
+                      child_chunk_size=conf.CHILD_CHUNK_SIZE,
+                      chunk_overlap=conf.CHUNK_OVERLAP):
+    """
+    加载文档并且进行分层切块,先切成大粒度父块,在将父块切成小粒度子块,子块关联父块
+    :param directory_path:文档目录路径
+    :param parent_chunk_size: 父块切分长度(大粒度)
+    :param child_chunk_size:  子块切分长度(小粒度)
+    :param chunk_overlap:     子块切分重叠长度(确保上下文关联)
+    :return:                  带元数据的子块列表(每个子块包含父块关联信息)
+    """
+    # 1.调用加载函数,从目录中加载所有文档
+    # 2.初始化切分器 : 区分通用文档和markdown文档
+    # 2.1通用文档切分
+    # 2.1.1 初始化父块和子块分词器(通用),适合txt/pdf/word等 基于中文语义进行分割
+    # 2.1.2 初始化markdown专用分词器,基于markdown语法结构分割.例如: 按照标题,段落
+    # 3.初始化子块列表 ,存储最终切分结果
+    child_chunks = []
+    # 4.遍历每个原始文档(带索引i,用于生成唯一id)
+    # 4.1获取文档的拓展名(判断是否为markdown,选择对应切分器)
+    # 4.2根据文件类型选择切分器
+    # 4.3 第1步:将文档切分成大块(绕)
+    # 5.遍历每个父块(带索引j,用于生成唯一id)
+    # 5.1生成父块唯一ID(格式:doc_文档索引_parent_父块索引)
+    # 5.2 为父块添加元数据(用于后续rag检索溯源) parent_id,parent_content
+    # 5.3 第2步:将父块切分成小块(子块)  小粒度 , 便于精准匹配
+    # 6.遍历每个子块(带索引k,用于生成唯一id)
+    # 6.1 为子块添加关联父块的元数据 parent_id,parent_content
+    # 6.2 生成子块唯一的id (格式: 父块ID_child_子块索引)
+    # 6.3 将子块添加到子块列表中
+    # 7.记录切分后的字总块数
+    # 8.返回子块列表(供后续向量存储和检索使用)
+    return child_chunks
 
 
 if __name__ == '__main__':
