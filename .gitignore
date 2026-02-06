@@ -1,3 +1,6 @@
+rag_qa/models
+rag_qa/nlp_bert_document-segmentation_chinese-base
+rag_qa/samples
 logs/*
 .idea/
 .DS_Store
