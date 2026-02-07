@@ -75,12 +75,59 @@ class QueryClassifier:
         pass
 
     # 4. 数据预处理
-    def preprocess_data(self, text, labels):
-        pass
+    def preprocess_data(self, texts, labels):
+        """
+        对文本进行分词,截断,填充,将标签转换为数字
+        :param text:  待处理文本列表
+        :param labels:  文本对应的标签列表(通用知识,专业知识)
+        :return: 处理后的编码
+        """
+        # 1.文本编码
+        encodings = self.tokenizer(texts, truncation=True, padding="max_length", max_length=128, return_tensors="pt")
+        # 2.标签转换
+        labels = [self.label_map[label] for label in labels]
+
+        # 3.返回结果
+        return encodings, labels
 
     # 6. 训练模型方法: 加载数据集 ,数据预处理,配置训练参数,并且训练模型
     def train_model(self, data_file="../classify_data/model_generic_5000.json"):
-        pass
+        """
+        该函数用于训练bert分类模型 ,区分查询类型 : 通用知识  和 专业知识
+        :param data_file: 预训练数据文件
+        :return:  None 因为训练好的模型直接保存起来的
+        """
+        # 1.检查数据集文件是否存在
+        if not os.path.exists(data_file):
+            logger.error(f"数据集文件{data_file}不存在")
+            raise FileNotFoundError(f"数据集文件{data_file}不存在!")
+        # 2. 加载数据集:从json文件中读取查询文件和对应的标签
+        with open(data_file, "r", encoding="utf-8") as f:
+            data = [json.loads(value) for value in f.readlines()]
+
+        # 3.提取文本和标签  :
+        texts = [item['query'] for item in data]
+        # print(texts)  #['什么是Skip List（跳表）？它的时间复杂度是多少？'.....]
+        labels = [item['label'] for item in data]  # ['通用知识', '专业咨询'.....]
+        # print(labels)
+
+        # 4.划分训练集和验证
+        train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2,
+                                                                            random_state=18)
+
+        # print(train_tests)
+        # print(train_labels)
+        #
+
+        # 5.数据预处理: 将文本转换为bert输入格式(分词,截断,填充),标签转换为数字
+        train_encodings, train_labels = self.preprocess_data(train_texts, train_labels)
+        val_encodings, val_labels = self.preprocess_data(val_texts, val_labels)
+        logger.info(f'val_encodings:{val_encodings.keys()}')  # ['input_ids', 'token_type_ids', 'attention_mask']
+        logger.info(f'val_labels:{val_labels}')  # [1, 1, 0, 1, 1, 1, ]
+
+        # 6.创建数据集对象:将编码和标签封装pytorch的dataset对象
+        self.create_dataset(train_encodings, train_labels)
+        self.create_dataset(val_encodings, val_labels)
 
     # 7.评估模型
     def compute_metrics(self):
@@ -99,3 +146,4 @@ if __name__ == "__main__":
     logger.info(f'rag_qa_path: {rag_qa_path}')
 
     query_classifier = QueryClassifier()
+    query_classifier.train_model()
