@@ -83,6 +83,12 @@ class VectorStore:
         self.dense_dim = self.embedding_function.dim['dense']
         logger.info(self.embedding_function.dim)
 
+        # 4.初始化bge-reranker 模型   用于重排序检索结果
+        # 4.1拼接重排序模型本地路径    rag_qa\models\bge-reranker-large
+        reranker_path = os.path.join(rag_qa_path, "models", "bge-reranker-large")
+        # 4.2加载模型
+        self.reranker = CrossEncoder(reranker_path, device=self.device)
+
         # 初始化milvus客户端
         self.client = MilvusClient(uri=f"http://{self.host}:{self.port}", db_name=self.database)
         # collections=self.client.list_collections()
@@ -213,13 +219,116 @@ class VectorStore:
             self.client.upsert(self.collection_name, data)
             logger.info(f"已插入{len(data)}条数据到集合中")
 
-    # todo 3 混合检索(稠密+稀疏)+重排序,返回精准父文档
+    # 3.4 混合(稠密+稀疏)检索+结果重排序+返回精准父文档
     def hybrid_search_with_rerank(self, query, k=conf.RETRIEVAL_K, source_filter=None):
-        pass
+        """
+        该函数用于执行混合检索(稠密+稀疏_向量) +结果重排序 返回精准父文档
+        :param query: 用户查询的文本
+        :param k: 混合检索返回的top-k子块的数量,默认从conf文件中获取
+        :param source_filter:学科过滤条件,  例如:  "AI":仅检索该学科的文档,None不过滤
+        :return:重排序后的top-M个父文档列表
+        """
+        # 1.生成查询嵌入向量  根据用户的提问获取稠密和稀疏向量
+        query_embedding = self.embedding_function([query])
+        # print(f"query_embedding：{query_embedding}")
+        # 2.提取查询稠密的向量
+        dense_query_vector = query_embedding["dense"][0]
 
-    # todo 4 从子块列表中提取去重父文档
+        # 3.处理查询的稀疏向量(存储非零值)
+        sparse_query_vector = {}
+        # 3.1获取查询的稀疏向量行(仅1个查询,获取第0行即可)
+        row = query_embedding['sparse'][[0]]
+        # 3.2获取非零值索引和权重
+        indices = row.indices  # 非零值索引列表
+        values = row.data  # 非零值权重列表
+        # 3.3组装稀疏向量字段:将索引与权重配对
+        for idx, value in zip(indices, values):
+            sparse_query_vector[idx] = value
+        # 4.构建检索过滤表达式(过滤学科)
+        filter_expr = f"source=='{source_filter}'" if source_filter else ""
+        # 5.构建稠密向量的检索请求 定义稠密向量 ANN
+        dense_request = AnnSearchRequest(
+            data=[dense_query_vector],
+            anns_field="dense_vector",  # 稠密向量字段名称
+            param={"metric_type": "IP", "params": {"nprobe": 10}},  # 检索参数 内积相似度 聚类数
+            limit=k,  # 检索top-K子块数量
+            expr=filter_expr  # 应用过滤表达式(按照学科进行过滤)   过滤结果 要么是 "" 或者source==ai
+        )
+        # 6.构建稀疏向量的检索请求 定义稀疏向量 ANN
+        sparse_request = AnnSearchRequest(
+            data=[sparse_query_vector],
+            anns_field="sparse_vector",
+            param={"metric_type": "IP", "params": {}},
+            limit=k,
+            expr=filter_expr
+        )
+        # 7.创建加权排序器WeightedRanker(稠密ANN权重,稀疏ANN权重)
+        ranker = WeightedRanker(1.0, 0.7)  # 稠密向量侧重:语义相似度  稀疏向量侧重:关键词匹配
+        # 8.执行混合检索 :  同时进行稠密 +稀疏向量检索  ,用加权排序器 返回Top-m父文档列表
+        results = self.client.hybrid_search(
+            collection_name=self.collection_name,
+            reqs=[dense_request, sparse_request],  # 混合检索请求(稠密+稀疏)
+            ranker=ranker,  # 加权排序器
+            limit=k,
+            output_fields=['text', 'parent_id', 'parent_content', 'source', 'timestamp']
+        )[0]  # 因为返回的是列表 ,取第0个元素
+        # print(f"-----------------:{results}")  # 列表  [hit,hit,hit]
+        # print(f"$$$$$$$$$$$$$$$$$$:{type(results)}")  #
+        # print(f"results:{len(results)}")  #1
+        # for  hit  in results:
+        #     print(f"hit-------------:{hit['entity']}")
+        # 9.将检索结果转化为document对象  目的:统一格式 ,方便后续处理
+        sub_chunks = [self._doc_from_hit(hit["entity"]) for hit in results]
+        # 10.从子块中提取去重父文档: 避免同一个父块的多个字段重复返回
+        parent_docs = self._get_unique_parent_docs(sub_chunks)
+        # 11.重排序逻辑: 父文档数量<2 跳过重排序(无需优化),直接返回即可
+        if len(parent_docs) < 2:
+            return parent_docs[:conf.CANDIDATE_M]
+        # 12.父文档数量>=2 执行重排序
+        if parent_docs:
+            # 12.1 构建 查询-文档 配对列表
+            pairs = [[query, doc.page_content] for doc in parent_docs]
+            # 12.2计算相关性得分
+            scores = self.reranker.predict(pairs)
+            # for i ,doc in sorted(zip(scores,parent_docs),reverse=True):
+            #     print(f"i-----{i}-----{doc}")
+            # 12.3按得分降序排序
+            ranked_parent_docs = [doc for _, doc in sorted(zip(scores, parent_docs), reverse=True)]
+        else:
+            # 13.若父文档为空(无检索结果),返回空列表
+            ranked_parent_docs = []
+        return ranked_parent_docs[:conf.CANDIDATE_M]
+
+    # todo 3.5 从子块列表中提取去重的父文档
     def _get_unique_parent_docs(self, sub_chunks):
-        pass
+        # 初始化集合，用于存储已处理的父块内容（去重）
+        parent_contents = set()
+        # 初始化列表，用于存储唯一父文档
+        unique_docs = []
+        # 遍历所有子块
+        for chunk in sub_chunks:
+            # 获取子块的父块内容，默认为子块内容
+            parent_content = chunk.metadata.get("parent_content", chunk.page_content)
+            # 检查父块内容是否非空且未重复
+            if parent_content and parent_content not in parent_contents:
+                # 创建新的 Document 对象，包含父块内容和元数据
+                unique_docs.append(Document(page_content=parent_content, metadata=chunk.metadata))
+                # 将父块内容添加到去重集合
+                parent_contents.add(parent_content)
+        # 返回去重后的父文档列表
+        return unique_docs
+
+    # 3.6 将milvus检索结果转换为langchain的document对象
+    def _doc_from_hit(self, hit):
+        return Document(
+            page_content=hit.get("text"),
+            metadata={
+                "parent_id": hit.get("parent_id"),
+                "parent_content": hit.get("parent_content"),
+                "source": hit.get("source"),
+                "timestamp": hit.get("timestamp")
+            }
+        )
 
 
 if __name__ == '__main__':
@@ -228,7 +337,13 @@ if __name__ == '__main__':
     setup_root_logger()
 
     vector_store = VectorStore()
-    directory_path = "../data/ai_data"
-    documents = process_documents(directory_path)
+    # directory_path = "../data/ai_data"
+    # documents = process_documents(directory_path)
+    #
+    # vector_store.add_documents(documents)
 
-    vector_store.add_documents(documents)
+    # 测试混合检索
+    query = "windows如何安装redis"
+    result = vector_store.hybrid_search_with_rerank(query=query, source_filter="ai")
+    print(f"result:{result}")
+    print(f"result:{len(result)}")
