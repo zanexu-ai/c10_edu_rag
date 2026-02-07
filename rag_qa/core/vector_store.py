@@ -69,7 +69,7 @@ class VectorStore:
 
         # 初始化 BGE-Reranker模型
         # 拼接重排序模型本地路径
-        bge_path = os.path.join(rag_qa_path, 'models', 'bge-reranker-large')
+        bge_path = os.path.join(rag_qa_path, 'models', 'bge-m3')
         # print(f"bge_path-------------:{bge_path}")
         # 加载本地模型
         # 参1: 模型本地路径  参2:GPU启用半精度计算(减少内存占用,提升速度)  参3:模型运行设备
