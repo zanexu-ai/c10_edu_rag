@@ -12,6 +12,8 @@ from sentence_transformers import CrossEncoder
 import hashlib
 import os, sys, torch
 
+from rag_qa.core.document_processor import process_documents
+
 # 配置项目路径: 确保程序能正确导入其它目录的模块.
 # 1. 获取当前文件所在目录的绝对路径.
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -67,13 +69,15 @@ class VectorStore:
 
         # 初始化 BGE-Reranker模型
         # 拼接重排序模型本地路径
-        # bge_path = os.path.join(rag_qa_path, 'models', 'bge-reranker-large')
+        bge_path = os.path.join(rag_qa_path, 'models', 'bge-reranker-large')
         # print(f"bge_path-------------:{bge_path}")
         # 加载本地模型
         # 参1: 模型本地路径  参2:GPU启用半精度计算(减少内存占用,提升速度)  参3:模型运行设备
-        self.embedding_function = BGEM3EmbeddingFunction(model_name_or_path="../models/bge-reranker-large",
-                                                         use_fp16=(self.device == "cuda"),
-                                                         device=self.device)
+        self.embedding_function = BGEM3EmbeddingFunction(
+            # model_name_or_path="../models/bge-reranker-large",
+            model_name_or_path=bge_path,
+            use_fp16=(self.device == "cuda"),
+            device=self.device, )
 
         # 获取稠密向量维度
         self.dense_dim = self.embedding_function.dim['dense']
@@ -158,9 +162,56 @@ class VectorStore:
         # 将集合加载到内存，确保可立即查询
         self.client.load_collection(self.collection_name)
 
-    # todo 2  将文档(子块)转换为向量并且存储milvus中
+    # todo 2  将文档(子块)转换为向量(稀疏_稠密的)并且存储milvus中
     def add_documents(self, documents):
-        pass
+        # 1.提取所有文档的内容列表:即每个文档对象中提取page_content属性
+        texts = [doc.page_content for doc in documents]
+        # 2.使用BGE-M3模型将文档内容转换为向量(稀疏,稠密)
+        # 输入:texts
+        # 输出:字典 包含:dense稠密向量列表  spares稀疏向量列表
+        embeddings = self.embedding_function(texts)
+        # print(f"embedding:{embedding}")  #
+
+        # 3.初始化空列表,存储待插入milvus数据(每个元素为一个数据字典)
+        data = []
+        # 4.遍历文档,组装插入数据
+        for i, doc in enumerate(documents):
+            # 4.1生成文档唯一ID:对文档内容进行MD5哈希,避免重复插入
+            text_hash = hashlib.md5(doc.page_content.encode("utf-8")).hexdigest()
+            # 4.2 处理稀疏向量
+            sparse_vector = {}
+            # 4.2.1  获取第i个文档的稀疏向量行
+            # row=embeddings['sparse'].getrow(i)  #会产生大量的警告信息
+            row = embeddings['sparse'][[i]]
+            # 4.2.2  获取稀疏向量的非零值
+            indices = row.indices  # 非零值的索引列表   [10,25,50]
+            values = row.data  # 非零值的权重列表   [0.1,0.2,0.3]
+            # 4.2.3  组装稀疏向量   即:{索引:权重}  ->{(10,0.1),(25,0.2),(50,0.3)}
+            for idx, value in zip(indices, values):
+                sparse_vector[idx] = value
+            # ✅ 必须：Milvus SPARSE_FLOAT_VECTOR 不允许空行
+            if not sparse_vector:
+                logger.warning(
+                    f"skip empty sparse vector: i={i}, id={text_hash}, "
+                    f"text_len={len(doc.page_content)}, preview={doc.page_content[:80]!r}"
+                )
+                continue
+            # 4.3组装单条插入的数据
+            data.append({
+                "id": text_hash,  # 唯一ID(MD5哈希值)
+                "text": doc.page_content,  # 文档内容,
+                "dense_vector": embeddings['dense'][i],  # 稠密向量(BGE-M3生成)
+                "sparse_vector": sparse_vector,  # 稀疏向量(BGE-M3生成)
+                "parent_id": doc.metadata['parent_id'],  # 父文档ID
+                'parent_content': doc.metadata["parent_content"],  # 父文档内容
+                "source": doc.metadata.get("source", "unknown"),
+                "timestamp": doc.metadata.get("timestamp", "unknown")
+            })
+
+        # 5.插入数据到milvus中
+        if data:
+            self.client.upsert(self.collection_name, data)
+            logger.info(f"已插入{len(data)}条数据到集合中")
 
     # todo 3 混合检索(稠密+稀疏)+重排序,返回精准父文档
     def hybrid_search_with_rerank(self, query, k=conf.RETRIEVAL_K, source_filter=None):
@@ -177,3 +228,7 @@ if __name__ == '__main__':
     setup_root_logger()
 
     vector_store = VectorStore()
+    directory_path = "../data/ai_data"
+    documents = process_documents(directory_path)
+
+    vector_store.add_documents(documents)
