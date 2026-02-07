@@ -17,7 +17,7 @@ from sklearn.metrics import classification_report, confusion_matrix
 from base.config import project_root
 
 logger = logging.getLogger(__name__)
-
+Trainer
 """
 有什么:
 1:有小数据集 
@@ -72,7 +72,28 @@ class QueryClassifier:
 
     # 5.创建符合要求的数据集
     def create_dataset(self, encodings, labels):
-        pass
+        # 1.定义内部类Dataset 集成pytorch的dataset
+        class DataSet(torch.utils.data.Dataset):
+            def __init__(self, encodings, labels):
+                # 初始化父类信息
+                super().__init__()
+                # 文本编码
+                self.encodings = encodings
+                # 标签
+                self.labels = labels
+
+            def __len__(self):
+                return len(self.labels)
+
+            # 获取数据集的某一个元素
+            def __getitem__(self, idx):
+                # 提取第idx条编码数据
+                # self.encodings.itmes() 字典遍历获取键和值
+                item = {key: val[idx] for key, val in self.encodings.itmes()}
+                item['labels'] = torch.tensor(self.labels[idx])
+                return item
+
+        return DataSet(encodings, labels)
 
     # 4. 数据预处理
     def preprocess_data(self, texts, labels):
