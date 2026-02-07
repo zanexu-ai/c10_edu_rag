@@ -42,7 +42,7 @@ def setup_root_logger(log_file: str | None = None) -> None:
 
     # 4. 控制台 Handler (输出到 stderr 或 stdout)
     console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(logging.INFO)
     console_handler.setFormatter(formatter_console)
 
     # 5. 文件 Handler

@@ -128,26 +128,58 @@ def process_documents(directory_path, parent_chunk_size=conf.PARENT_CHUNK_SIZE,
     :return:                  带元数据的子块列表(每个子块包含父块关联信息)
     """
     # 1.调用加载函数,从目录中加载所有文档
+    documents = load_documents_from_directory(directory_path)
+    logger.info(f"加载的文档数量:{len(documents)}")
     # 2.初始化切分器 : 区分通用文档和markdown文档
     # 2.1通用文档切分
     # 2.1.1 初始化父块和子块分词器(通用),适合txt/pdf/word等 基于中文语义进行分割
+    parent_splitter = ChineseRecursiveTextSplitter(chunk_size=parent_chunk_size, chunk_overlap=chunk_overlap)
+    child_splitter = ChineseRecursiveTextSplitter(chunk_size=child_chunk_size, chunk_overlap=chunk_overlap)
     # 2.1.2 初始化markdown专用分词器,基于markdown语法结构分割.例如: 按照标题,段落
+    markdown_parent_splitter = MarkdownTextSplitter(chunk_size=parent_chunk_size, chunk_overlap=chunk_overlap)
+    markdown_child_splitter = MarkdownTextSplitter(chunk_size=child_chunk_size, chunk_overlap=chunk_overlap)
+
     # 3.初始化子块列表 ,存储最终切分结果
     child_chunks = []
+    parent_chunks = []
     # 4.遍历每个原始文档(带索引i,用于生成唯一id)
-    # 4.1获取文档的拓展名(判断是否为markdown,选择对应切分器)
-    # 4.2根据文件类型选择切分器
-    # 4.3 第1步:将文档切分成大块(绕)
-    # 5.遍历每个父块(带索引j,用于生成唯一id)
-    # 5.1生成父块唯一ID(格式:doc_文档索引_parent_父块索引)
-    # 5.2 为父块添加元数据(用于后续rag检索溯源) parent_id,parent_content
-    # 5.3 第2步:将父块切分成小块(子块)  小粒度 , 便于精准匹配
-    # 6.遍历每个子块(带索引k,用于生成唯一id)
-    # 6.1 为子块添加关联父块的元数据 parent_id,parent_content
-    # 6.2 生成子块唯一的id (格式: 父块ID_child_子块索引)
-    # 6.3 将子块添加到子块列表中
-    # 7.记录切分后的字总块数
+    for i, doc in enumerate(documents):
+        # 4.1获取文档的拓展名(判断是否为markdown,选择对应切分器)
+        file_extension = os.path.splitext(doc.metadata.get("file_path", ""))[1].lower()
+        is_markdown = (file_extension == ".md")
+
+        # 4.2根据文件类型选择切分器
+        parent_splitter_to_use = markdown_parent_splitter if is_markdown else parent_splitter
+        # logger.info(f"处理文档:{'markdown' if is_markdown else 'ChineseRecursive'}")
+
+        child_splitter_to_use = markdown_child_splitter if is_markdown else child_splitter
+        logger.info(
+            f"处理文档:{doc.metadata['file_path']}, 使用切分器:{'markdown' if is_markdown else 'ChineseRecursive'}")
+        # 4.3 第1步:将文档切分成大块(绕)
+        parten_docs = parent_splitter_to_use.split_documents([doc])
+        # 5.遍历每个父块(带索引j,用于生成唯一id)
+        for j, parent_doc in enumerate(parten_docs):
+            # 5.1生成父块唯一ID(格式:doc_文档索引_parent_父块索引)
+            parent_id = f"doc_{i}_parent_{j}"
+            # 5.2 为父块添加元数据(用于后续rag检索溯源) parent_id,parent_content
+            parent_doc.metadata['parent_id'] = parent_id
+            parent_doc.metadata['parent_content'] = parent_doc.page_content
+            # 5.3 第2步:将父块切分成小块(子块)  小粒度 , 便于精准匹配
+            sub_chunks = child_splitter_to_use.split_documents([parent_doc])
+            parent_chunks.append(parent_doc)
+            # 6.遍历每个子块(带索引k,用于生成唯一id)
+            for k, sub_chunk in enumerate(sub_chunks):
+                # 6.1 为子块添加关联父块的元数据 parent_id,parent_content
+                sub_chunk.metadata['parent_id'] = parent_id
+                sub_chunk.metadata['parent_content'] = parent_doc.page_content
+                # 6.2 生成子块唯一的id (格式: 父块ID_child_子块索引)
+                sub_chunk.metadata["id"] = f"{parent_id}_child_{k}"
+                # 6.3 将子块添加到子块列表中
+                child_chunks.append(sub_chunk)
+    # 7.记录切分后的子总块数
+    logger.info(f"子块数量:{len(child_chunks)}")
     # 8.返回子块列表(供后续向量存储和检索使用)
+    # return child_chunks, parent_chunks
     return child_chunks
 
 
@@ -171,15 +203,35 @@ if __name__ == '__main__':
     # pprint(rst)
     # print(len(rst))
 
-    documents = load_documents_from_directory('../data/ai_data')
-    logger.debug(f'-' * 99)
-    for i, doc in enumerate(documents):
-        logger.debug(f'{i}: {doc}')
-        logger.debug(f'-' * 99)
-    logger.debug(len(documents))
+    # documents = load_documents_from_directory('../data/ai_data')
+    # logger.debug(f'-' * 99)
+    # for i, doc in enumerate(documents):
+    #     logger.debug(f'{i}: {doc}')
+    #     logger.debug(f'-' * 99)
+    # logger.debug(len(documents))
 
     # for root, dirs, files in os.walk("../data/ai_data"):
     #     print(f'root: {root}')  # 当前遍历到的目录
     #     print(f'dirs: {dirs}')  # 当前遍历到的目录
     #     print(f'files: {files}')  # 当前遍历到的目录
     #     print(f'*' * 99)
+    # 测试二:process_documents
+    # child_chunks, parent_chunks = process_documents(
+    child_chunks = process_documents(
+        '../data/ai_data',  # 目标目录文本
+    )
+
+    # 2.打印
+    logger.info(f"分完的子块总数:{len(child_chunks)}")
+    # logger.info("前一个子块的详情:")
+    # print(f'-'*999)
+    # # logger.info(child_chunks if child_chunks else "未生成任何子块")
+    # pprint(child_chunks)
+    # print(f'-'*999)
+
+    # logger.info(f"分完的父块总数:{len(parent_chunks)}")
+    # logger.info("前一个父块的详情:")
+    # print(f'*'*999)
+    # # logger.info(parent_chunks if parent_chunks else "未生成任何父块")
+    # pprint(parent_chunks)
+    # print(f'*'*999)
