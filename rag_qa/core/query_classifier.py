@@ -54,7 +54,20 @@ class QueryClassifier:
 
     # 2.加载模型方法:从指定路径加载已经训练模型,若不存在则初始化模型
     def load_model(self):
-        pass
+        #判断模型路径是否存在(即:是否已训练模型)
+        if os.path.exists(self.model_path):  #../models/bert_query_classifier
+            #1.1加载已训练模型
+            self.model=BertForSequenceClassification.from_pretrained(self.model_path)
+            #1.2将模型移动到指定设备
+            self.model.to(self.device)
+            #1.3日志记录加载成功
+            logger.info(f"模型加载成功:{self.model_path}")
+        else:
+            #2.若模型路径不存在,初始化新模型
+            self.model=BertForSequenceClassification.from_pretrained("../models/bert-base-chinese",num_labels=len(self.label_map))
+            # 1.2将模型移动到指定设备
+            self.model.to(self.device)
+            logger.info(f"模型加载成功:初始化新的bert模型")
 
     # 5.创建符合要求的数据集
     def create_dataset(self, encodings, labels):
