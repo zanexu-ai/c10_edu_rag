@@ -54,7 +54,7 @@ def main():
         print("输入查询进行问答，输入 'q' 退出。")
         while True:
             # 获取用户输入
-            query = input("\n输入查询: ").strip()
+            query = input("\n输入查询，输入 'q' 退出: ").strip()
             if query.lower() == "q":
                 # 记录退出日志
                 logger.info("退出 MySQL 系统")
