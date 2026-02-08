@@ -44,13 +44,14 @@ class QueryClassifier:
         # 3.初始化模型变量
         self.model = None
         # 4.选择运行设备
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = 'mps'
         # 5.日志模型记录运行信息
         logger.info(f"模型运行设备:{self.device}")
         # 6.定义标签映射 ,将文本标签转为数字 便于模型训练
         self.label_map = {"通用知识": 0, "专业咨询": 1}
         # 7.加载模型:初始化时,自动调用load_model ,确保模型可用
-        self.load_model()
+        self.trained = self.load_model()
 
     # 2.加载模型方法:从指定路径加载已经训练模型,若不存在则初始化模型
     def load_model(self):
@@ -61,14 +62,16 @@ class QueryClassifier:
             # 1.2将模型移动到指定设备
             self.model.to(self.device)
             # 1.3日志记录加载成功
-            logger.info(f"模型加载成功:{self.model_path}")
+            logger.info(f"已训练的模型加载成功: {self.model_path}")
+            return True
         else:
             # 2.若模型路径不存在,初始化新模型
             self.model = BertForSequenceClassification.from_pretrained("../models/bert-base-chinese",
                                                                        num_labels=len(self.label_map))
             # 1.2将模型移动到指定设备
             self.model.to(self.device)
-            logger.info(f"模型加载成功:初始化新的bert模型")
+            logger.info(f"模型加载成功: 初始化新的bert模型")
+            return False
 
     # 5.创建符合要求的数据集
     def create_dataset(self, encodings, labels):
@@ -89,7 +92,7 @@ class QueryClassifier:
             def __getitem__(self, idx):
                 # 提取第idx条编码数据
                 # self.encodings.itmes() 字典遍历获取键和值
-                item = {key: val[idx] for key, val in self.encodings.itmes()}
+                item = {key: val[idx] for key, val in self.encodings.items()}
                 item['labels'] = torch.tensor(self.labels[idx])
                 return item
 
@@ -118,6 +121,8 @@ class QueryClassifier:
         :param data_file: 预训练数据文件
         :return:  None 因为训练好的模型直接保存起来的
         """
+        if self.trained:
+            return
         # 1.检查数据集文件是否存在
         if not os.path.exists(data_file):
             logger.error(f"数据集文件{data_file}不存在")
@@ -147,16 +152,62 @@ class QueryClassifier:
         logger.info(f'val_labels:{val_labels}')  # [1, 1, 0, 1, 1, 1, ]
 
         # 6.创建数据集对象:将编码和标签封装pytorch的dataset对象
-        self.create_dataset(train_encodings, train_labels)
-        self.create_dataset(val_encodings, val_labels)
+        train_dataset = self.create_dataset(train_encodings, train_labels)
+        val_dataset = self.create_dataset(val_encodings, val_labels)
+        # print(f"-------train_dataset:{train_dataset}")
 
-    # 7.评估模型
-    def compute_metrics(self):
-        pass
+        # 7.配置训练参数:定义模型训练超参数
+        training_args = TrainingArguments(
+            output_dir="./bert_results",  # 模型保存路径
+            num_train_epochs=3,  # 训练轮数
+            per_device_train_batch_size=8,  # 训练(每个设备)批次大小
+            per_device_eval_batch_size=8,  # 验证(每个设备)批次大小
+            warmup_steps=20,
+            weight_decay=0.01,  # 权重衰减系数
+            logging_dir="./bert_logs",
+            logging_steps=10,  # 每隔10步保存一下日志
+            eval_strategy="epoch",  # 每轮训练结束后进行验证
+            save_strategy="epoch",  # 每轮训练结束后,保存模型检查点
+            load_best_model_at_end=True,  # 训练介绍后,加载验证集表现最好的模型
+            save_total_limit=1,  # 只保存一个检查点,
+            metric_for_best_model="eval_loss",  # 以验证集的损失作为最优模型评判标准
+            fp16=False  # 禁止混合精度(简化配置,需要GPU支持)
+        )
+
+        # 8.初始化trainer
+        trainer = Trainer(
+            model=self.model,
+            args=training_args,
+            train_dataset=train_dataset,
+            eval_dataset=val_dataset,
+            compute_metrics=self.compute_metrics  # 自定评估指标(准确率)
+        )
+
+        # 9.开始训练模型并且记录日志
+        logger.info("开始训练bert模型")
+        trainer.train()
+
+        # 10.保存训练好的模型
+        self.sava_model()
+
+        # 11.验证集评估模型性能(val_testx,val_labels)
+        # self.evaluate_model()
+
+    def compute_metrics(self, eval_pred):
+        logits, labels = eval_pred
+        predictions = np.argmax(logits, axis=-1)
+        accuracy = (predictions == labels).mean()
+        return {"accuracy": accuracy}
 
     # 3.保存模型
     def sava_model(self):
-        pass
+        # 保存模型和分词器到指定路径
+        self.model.save_pretrained(self.model_path)
+        self.tokenizer.save_pretrained(self.model_path)
+        logger.info(f"模型保存成功:{self.model_path}")
+
+    # def evaluate_model(self):
+    #     pass
 
 
 if __name__ == "__main__":
@@ -166,5 +217,5 @@ if __name__ == "__main__":
 
     logger.info(f'rag_qa_path: {rag_qa_path}')
 
-    query_classifier = QueryClassifier()
-    query_classifier.train_model()
+    query_classifier = QueryClassifier(os.path.join(rag_qa_path, 'models', 'bert_query_classifier'))
+    query_classifier.train_model(os.path.join(rag_qa_path, 'classify_data', 'model_generic_5000.json'))
