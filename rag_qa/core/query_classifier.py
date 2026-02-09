@@ -121,8 +121,8 @@ class QueryClassifier:
         :param data_file: 预训练数据文件
         :return:  None 因为训练好的模型直接保存起来的
         """
-        if self.trained:
-            return
+        # if self.trained:
+        #     return
         # 1.检查数据集文件是否存在
         if not os.path.exists(data_file):
             logger.error(f"数据集文件{data_file}不存在")
@@ -148,8 +148,8 @@ class QueryClassifier:
         # 5.数据预处理: 将文本转换为bert输入格式(分词,截断,填充),标签转换为数字
         train_encodings, train_labels = self.preprocess_data(train_texts, train_labels)
         val_encodings, val_labels = self.preprocess_data(val_texts, val_labels)
-        logger.info(f'val_encodings:{val_encodings.keys()}')  # ['input_ids', 'token_type_ids', 'attention_mask']
-        logger.info(f'val_labels:{val_labels}')  # [1, 1, 0, 1, 1, 1, ]
+        # logger.info(f'val_encodings:{val_encodings.keys()}')  # ['input_ids', 'token_type_ids', 'attention_mask']
+        # logger.info(f'val_labels:{val_labels}')  # [1, 1, 0, 1, 1, 1, ]
 
         # 6.创建数据集对象:将编码和标签封装pytorch的dataset对象
         train_dataset = self.create_dataset(train_encodings, train_labels)
@@ -184,14 +184,14 @@ class QueryClassifier:
         )
 
         # 9.开始训练模型并且记录日志
-        logger.info("开始训练bert模型")
-        trainer.train()
+        # logger.info("开始训练bert模型")
+        # trainer.train()
+        #
+        # # 10.保存训练好的模型
+        # self.sava_model()
 
-        # 10.保存训练好的模型
-        self.sava_model()
-
-        # 11.验证集评估模型性能(val_testx,val_labels)
-        # self.evaluate_model()
+        # 11.验证集评估模型性能(val_texts,val_labels)
+        self.evaluate_model(val_texts, val_labels)
 
     def compute_metrics(self, eval_pred):
         logits, labels = eval_pred
@@ -206,8 +206,34 @@ class QueryClassifier:
         self.tokenizer.save_pretrained(self.model_path)
         logger.info(f"模型保存成功:{self.model_path}")
 
-    # def evaluate_model(self):
-    #     pass
+    # 评估模型 ->验证集评估模型性能->判断模型好不好用
+    def evaluate_model(self, texts, labels):
+        """
+        评估模型在指定的文本和标签测试性能 _  输出分类评估报告(准确,召回率,...)和混淆矩阵
+        :param texts:待评估的文本列表(需要预测的输入文本)   query
+        :param labels:文本对应的真实标签(已经转换为数字)  0:通用知识  1:专业咨询
+        :return:  无, 日志输出评估结果
+        """
+        # 1.文本编码
+        encodings = self.tokenizer(texts, truncation=True, padding="max_length", max_length=128, return_tensors="pt")
+        # 2.创建数据集对象: 将编码后的文本和真实标签封装pytorch的DataSet对象
+        dataset = self.create_dataset(encodings, labels)
+        # 3.输出化Trainer :仅传入模型     加载pkl
+        model = Trainer(model=self.model)
+        # 4.预测执行 : 让模型对传入的数据集整体进行预测 得到所有样本的预测结果
+        predictions = model.predict(dataset)  # 模型输出的每个类别的"可能性分数" [3.8,-3.9]   0:通用知识   1: 专业咨询
+        # 5.提取预测标签
+        pred_labels = np.argmax(predictions.predictions, axis=-1)
+        # 6.获取真实标签
+        true_labels = labels
+        # 7.分类报告 和 混淆矩阵
+        logger.info("分类报告:")
+        # 8.输出分类报告
+        logger.info(
+            f"\n{classification_report(true_labels, pred_labels, target_names=['通用知识', '专业咨询'])}")  # 把数字转换成中文,方便阅读
+        # 9.输出混淆矩阵
+        logger.info("混淆矩阵:")
+        logger.info(f"\n {confusion_matrix(true_labels, pred_labels)}")
 
 
 if __name__ == "__main__":
