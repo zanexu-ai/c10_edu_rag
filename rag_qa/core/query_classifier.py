@@ -121,8 +121,8 @@ class QueryClassifier:
         :param data_file: 预训练数据文件
         :return:  None 因为训练好的模型直接保存起来的
         """
-        # if self.trained:
-        #     return
+        if self.trained:
+            return
         # 1.检查数据集文件是否存在
         if not os.path.exists(data_file):
             logger.error(f"数据集文件{data_file}不存在")
@@ -139,7 +139,7 @@ class QueryClassifier:
 
         # 4.划分训练集和验证
         train_texts, val_texts, train_labels, val_labels = train_test_split(texts, labels, test_size=0.2,
-                                                                            random_state=18)
+                                                                            random_state=42)
 
         # print(train_tests)
         # print(train_labels)
@@ -184,11 +184,11 @@ class QueryClassifier:
         )
 
         # 9.开始训练模型并且记录日志
-        # logger.info("开始训练bert模型")
-        # trainer.train()
+        logger.info("----------------------开始训练bert模型----------------------")
+        trainer.train()
         #
         # # 10.保存训练好的模型
-        # self.sava_model()
+        self.sava_model()
 
         # 11.验证集评估模型性能(val_texts,val_labels)
         self.evaluate_model(val_texts, val_labels)
@@ -235,6 +235,32 @@ class QueryClassifier:
         logger.info("混淆矩阵:")
         logger.info(f"\n {confusion_matrix(true_labels, pred_labels)}")
 
+    # 预测类别的方法 -> 用户输入查询的文本,用训练好的模型判断他属于通用知识 还是专业咨询
+    def predict_category(self, query):
+        """
+        用训练好的模型对单个用户查询进行分类,判断它属于通用 专业的
+        :param query: 用户输入的查询文本
+        :return: 意图识别返回结果   通用知识   专业咨询
+        """
+        # 1.检查模型是否加载
+        if self.model is None:
+            # 1-1:模型未加载
+            logger.error("模型未训练或者未加载")
+            # 1-2:返回给llm
+            return "通用知识"
+        # 2.对用户查询进行编码
+        encoding = self.tokenizer(query, truncation=True, padding="max_length", max_length=128, return_tensors="pt")
+        # 3.移动设备
+        encoding = {k: v.to(self.device) for k, v in encoding.items()}
+        # 4.开始预测(不需要进行梯度计算,进行预测)
+        with torch.no_grad():
+            # 获取模型输出
+            outputs = self.model(**encoding)
+            # 获取预测结果
+            prediction = torch.argmax(outputs.logits, dim=1).item()
+        # 5.返回预测结果类别
+        return "专业咨询" if prediction == 1 else "通用知识"
+
 
 if __name__ == "__main__":
     from base.logger import setup_root_logger
@@ -245,3 +271,10 @@ if __name__ == "__main__":
 
     query_classifier = QueryClassifier(os.path.join(rag_qa_path, 'models', 'bert_query_classifier'))
     query_classifier.train_model(os.path.join(rag_qa_path, 'classify_data', 'model_generic_5000.json'))
+
+    # 2.测试预测类别
+    q = "ai什么时候开课?"
+    q = "ai是什么?"
+    logger.info(f'query: {q}')
+    result = query_classifier.predict_category(q)
+    logger.info(f'class: {result}')
